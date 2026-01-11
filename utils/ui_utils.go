@@ -11,8 +11,8 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// MakeWideMultiLineEntry 创建宽Entry组件，禁用编辑
-func MakeWideMultiLineEntry(width, height float32, defaultInput, placeholder string) (*widget.Entry, fyne.CanvasObject) {
+// MakeWideMultiLineEntry 创建宽Entry组件，禁用编辑（响应式版本，会横向扩展）
+func MakeWideMultiLineEntry(defaultInput, placeholder string) (*widget.Entry, fyne.CanvasObject) {
 	e := widget.NewMultiLineEntry()
 	e.Wrapping = fyne.TextWrapWord
 	e.SetMinRowsVisible(2) // 让输入框高度能显示两行
@@ -20,8 +20,9 @@ func MakeWideMultiLineEntry(width, height float32, defaultInput, placeholder str
 	e.SetText(defaultInput)
 	e.SetPlaceHolder(placeholder)
 
-	box := container.NewGridWrap(fyne.NewSize(width, height), e)
-	return e, box
+	// 使用 Border 布局，Entry 作为 center 会自动扩展填充可用空间
+	// nil 参数表示没有 top/bottom/left/right 对象，只有 center
+	return e, container.NewBorder(nil, nil, nil, nil, e)
 }
 
 // ParseHexColor 解析 hex 颜色
@@ -49,9 +50,9 @@ func MakeColorSelector(onChange func(string)) fyne.CanvasObject {
 	var colorButtons []fyne.CanvasObject
 	for _, c := range colors {
 		colorCode := c
-		// 彩色背景方块
+		// 彩色背景方块 - 使用合理的固定尺寸
 		rect := canvas.NewRectangle(ParseHexColor(c))
-		rect.SetMinSize(fyne.NewSize(35, 5))
+		rect.SetMinSize(fyne.NewSize(30, 30))
 		// 透明按钮覆盖在方块上
 		btn := widget.NewButton("", func() {
 			if onChange != nil {

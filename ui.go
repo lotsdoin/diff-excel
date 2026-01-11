@@ -8,7 +8,6 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 )
@@ -370,10 +369,10 @@ func (a *ExcelCompareApp) createFileUploadHandlers() {
 
 // 初始化UI组件
 func (a *ExcelCompareApp) initUIComponents() {
-	w := a.myWindow.Canvas().Size().Width
-	a.srcEntry, a.srcEntryBox = utils.MakeWideMultiLineEntry(w/2-10, 60, "", "旧文件地址")
-	a.cmpEntry, a.cmpEntryBox = utils.MakeWideMultiLineEntry(w/2-10, 60, "", "新文件地址")
-	a.outDirEntry, a.outDirBox = utils.MakeWideMultiLineEntry(w/2-10, 60, a.outDir, "输出文件目录") // 显示默认输出目录
+	// 移除固定尺寸，使用响应式布局
+	a.srcEntry, a.srcEntryBox = utils.MakeWideMultiLineEntry("", "旧文件地址")
+	a.cmpEntry, a.cmpEntryBox = utils.MakeWideMultiLineEntry("", "新文件地址")
+	a.outDirEntry, a.outDirBox = utils.MakeWideMultiLineEntry(a.outDir, "输出文件目录") // 显示默认输出目录
 
 	// 初始化单Sheet选择器（默认模式）
 	a.srcSheetSelect = widget.NewSelect([]string{}, func(selected string) {
@@ -448,9 +447,8 @@ func (a *ExcelCompareApp) createUILayout() fyne.CanvasObject {
 	})
 	utils.SetBlue(compareBtn)
 
-	// 日志框滚动容器，固定高度
+	// 日志框滚动容器，使用响应式高度
 	logScroll := container.NewScroll(a.logRich)
-	logScroll.SetMinSize(fyne.NewSize(750, 150))
 
 	// 清空日志按钮，带确认对话框
 	clearLogBtn := widget.NewButton("清空日志", func() {
@@ -465,13 +463,14 @@ func (a *ExcelCompareApp) createUILayout() fyne.CanvasObject {
 	// 日志标题栏，带清空按钮
 	logHeader := container.NewBorder(nil, nil, nil, clearLogBtn, widget.NewLabel("日志输出："))
 
-	spacing := canvas.NewRectangle(nil)     // 空矩形
-	spacing.SetMinSize(fyne.NewSize(0, 10)) // 高度 10 像素，宽度 0
+	// 使用主题的 padding 而不是固定尺寸
+	spacing := canvas.NewRectangle(nil) // 空矩形作为间距
+	spacing.SetMinSize(fyne.NewSize(0, 8)) // 小间距
 
 	line := canvas.NewRectangle(nil)
-	line.SetMinSize(fyne.NewSize(50, 1))
-	line.FillColor = utils.ParseHexColor("#fff")
-	line.StrokeColor = utils.ParseHexColor("#fff")
+	line.SetMinSize(fyne.NewSize(0, 1)) // 只设置高度，宽度自适应
+	line.FillColor = utils.ParseHexColor("#e0e0e0") // 使用更柔和的灰色
+	line.StrokeColor = utils.ParseHexColor("#e0e0e0")
 
 	leftBox := container.NewVBox(
 		utils.SetTitle("旧文件", 18),
@@ -508,11 +507,13 @@ func (a *ExcelCompareApp) createUILayout() fyne.CanvasObject {
 	)
 
 	content := container.NewVBox(
-		container.New(layout.NewGridLayout(2), leftBox, rightBox),
+		// 使用 GridWithRows 而不是普通的 GridLayout，这样列会自动扩展
+		container.NewGridWithColumns(2, leftBox, rightBox),
 		spacing,
 		container.NewVBox(
 			widget.NewSeparator(),
-			container.New(layout.NewGridLayout(3),
+			// 3列布局，让选择器和按钮能响应式
+			container.NewGridWithColumns(3,
 				a.currentSrcSheetSelect,
 				a.currentCmpSheetSelect,
 				a.addPairButton,
@@ -521,7 +522,7 @@ func (a *ExcelCompareApp) createUILayout() fyne.CanvasObject {
 			a.createSheetPairsListContainer(), // 使用新的容器函数
 		),
 		spacing,
-		container.New(layout.NewGridLayout(2), leftBox2, rightBox2),
+		container.NewGridWithColumns(2, leftBox2, rightBox2),
 		// 新的Sheet对比组功能区域
 		container.NewVBox(
 			widget.NewLabel(""),
@@ -532,14 +533,14 @@ func (a *ExcelCompareApp) createUILayout() fyne.CanvasObject {
 		logScroll,
 	)
 
-	paddedContent := container.NewVBox(
-		spacing, // 上间距
-		container.NewHBox(
-			spacing, // 左间距
-			content,
-			spacing, // 右间距
-		),
-		spacing, // 下间距
+	// 使用 Border 布局让 content 能够扩展
+	// spacing 作为 padding，content 作为 center 会自动扩展填充可用空间
+	paddedContent := container.NewBorder(
+		spacing, // top padding
+		spacing, // bottom padding
+		spacing, // left padding
+		spacing, // right padding
+		content, // center - 会扩展填充所有可用空间
 	)
 
 	return container.NewScroll(paddedContent)
@@ -556,22 +557,22 @@ func (a *ExcelCompareApp) initUI() {
 	a.myWindow.SetContent(a.createUILayout())
 }
 
-// createSheetPairsListContainer 创建对比组列表容器，支持动态高度
+// createSheetPairsListContainer 创建对比组列表容器，支持响应式布局
 func (a *ExcelCompareApp) createSheetPairsListContainer() fyne.CanvasObject {
 	// 创建带滚动的容器
 	scrollContainer := container.NewScroll(a.sheetPairsList)
 
-	// 计算高度：最少显示3行，最多6行
+	// 根据列表项数量动态调整高度，作为建议高度
 	itemCount := len(a.sheetPairs)
-	if itemCount < 3 {
-		itemCount = 3 // 最少显示3行
-	} else if itemCount > 6 {
-		itemCount = 6 // 最多显示6行
+	if itemCount < 2 {
+		itemCount = 2 // 最少显示2行
+	} else if itemCount > 5 {
+		itemCount = 5 // 最多显示5行
 	}
 
-	// 每行高度约30像素，加上一些边距
-	height := float32(itemCount*35 + 10)
-	scrollContainer.SetMinSize(fyne.NewSize(400, height))
+	// 只设置最小高度建议，不限制宽度扩展
+	// 使用相对的行高，但不阻止横向扩展
+	scrollContainer.SetMinSize(fyne.NewSize(0, float32(itemCount*40)))
 
 	return scrollContainer
 }
