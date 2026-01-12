@@ -20,9 +20,9 @@ func MakeWideMultiLineEntry(defaultInput, placeholder string) (*widget.Entry, fy
 	e.SetText(defaultInput)
 	e.SetPlaceHolder(placeholder)
 
-	// 使用 Border 布局，Entry 作为 center 会自动扩展填充可用空间
-	// nil 参数表示没有 top/bottom/left/right 对象，只有 center
-	return e, container.NewBorder(nil, nil, nil, nil, e)
+	// 直接返回 Entry，让调用处的布局控制其扩展行为
+	// Entry 作为基础组件，会被 Border、VBox 等容器自动扩展
+	return e, e
 }
 
 // ParseHexColor 解析 hex 颜色

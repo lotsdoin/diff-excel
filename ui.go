@@ -301,6 +301,8 @@ func (a *ExcelCompareApp) createFileUploadHandlers() {
 			}
 		}, a.myWindow)
 		fd.SetFilter(storage.NewExtensionFileFilter([]string{".xlsx"}))
+		// 继承主窗口大小
+		fd.Resize(a.myWindow.Canvas().Size())
 		fd.Show()
 	}
 
@@ -363,6 +365,8 @@ func (a *ExcelCompareApp) createFileUploadHandlers() {
 			}
 		}, a.myWindow)
 		fd.SetFilter(storage.NewExtensionFileFilter([]string{".xlsx"}))
+		// 继承主窗口大小
+		fd.Resize(a.myWindow.Canvas().Size())
 		fd.Show()
 	}
 }
@@ -412,6 +416,34 @@ func (a *ExcelCompareApp) initUIComponents() {
 	a.createFileUploadHandlers()
 }
 
+// createFileUploadComponent 创建响应式的文件上传组件
+// title: 标题文本
+// uploadBtn: 上传按钮
+// clearBtn: 清空按钮
+// entryBox: 文件路径输入框容器
+func (a *ExcelCompareApp) createFileUploadComponent(title string, uploadBtn, clearBtn *widget.Button, entryBox fyne.CanvasObject) fyne.CanvasObject {
+	// 创建一个小的间距对象用于组件内部
+	spacing := canvas.NewRectangle(nil)
+	spacing.SetMinSize(fyne.NewSize(0, 6))
+
+	// 创建顶部区域（标题和按钮），这个区域不需要扩展
+	topSection := container.NewVBox(
+		utils.SetTitle(title, 18),
+		spacing,
+		container.NewHBox(uploadBtn, clearBtn),
+	)
+
+	// 使用 Border 布局：topSection 固定在顶部，entryBox 填充剩余空间
+	// 这样 entryBox 会明确扩展以填充所有可用宽度
+	return container.NewBorder(
+		topSection, // top - 固定
+		nil,        // bottom - 无
+		nil,        // left - 无
+		nil,        // right - 无
+		entryBox,   // center - 会扩展填充剩余空间
+	)
+}
+
 // 创建UI布局
 func (a *ExcelCompareApp) createUILayout() fyne.CanvasObject {
 	// 创建按钮
@@ -422,6 +454,10 @@ func (a *ExcelCompareApp) createUILayout() fyne.CanvasObject {
 
 	srcClearBtn := a.makeClearBtn(a.srcEntry, a.srcSheetSelect, &a.srcFile, &a.srcSheet)
 	cmpClearBtn := a.makeClearBtn(a.cmpEntry, a.cmpSheetSelect, &a.cmpFile, &a.cmpSheet)
+
+	// 创建文件上传组件区域
+	leftBox := a.createFileUploadComponent("旧文件", srcBtn, srcClearBtn, a.srcEntryBox)
+	rightBox := a.createFileUploadComponent("新文件", cmpBtn, cmpClearBtn, a.cmpEntryBox)
 
 	outDirBtn := widget.NewButton("选择输出目录", func() {
 		fd := dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
@@ -435,6 +471,8 @@ func (a *ExcelCompareApp) createUILayout() fyne.CanvasObject {
 			a.outDir = uri.Path()
 			a.outDirEntry.SetText(a.outDir)
 		}, a.myWindow)
+		// 继承主窗口大小
+		fd.Resize(a.myWindow.Canvas().Size())
 		fd.Show()
 	})
 	outDirClearBtn := widget.NewButton("清空", func() {
@@ -472,19 +510,6 @@ func (a *ExcelCompareApp) createUILayout() fyne.CanvasObject {
 	line.FillColor = utils.ParseHexColor("#e0e0e0") // 使用更柔和的灰色
 	line.StrokeColor = utils.ParseHexColor("#e0e0e0")
 
-	leftBox := container.NewVBox(
-		utils.SetTitle("旧文件", 18),
-		spacing,
-		container.NewHBox(srcBtn, srcClearBtn), // 移除单Sheet选择器
-		a.srcEntryBox,
-	)
-	rightBox := container.NewVBox(
-		utils.SetTitle("新文件", 18),
-		spacing,
-		container.NewHBox(cmpBtn, cmpClearBtn), // 移除单Sheet选择器
-		a.cmpEntryBox,
-	)
-
 	leftBox2 := container.NewVBox(
 		utils.SetTitle("输出目录", 18),
 		spacing,
@@ -507,7 +532,7 @@ func (a *ExcelCompareApp) createUILayout() fyne.CanvasObject {
 	)
 
 	content := container.NewVBox(
-		// 使用 GridWithRows 而不是普通的 GridLayout，这样列会自动扩展
+		// 文件上传区域 - GridWithColumns 会均分宽度
 		container.NewGridWithColumns(2, leftBox, rightBox),
 		spacing,
 		container.NewVBox(
@@ -522,6 +547,7 @@ func (a *ExcelCompareApp) createUILayout() fyne.CanvasObject {
 			a.createSheetPairsListContainer(), // 使用新的容器函数
 		),
 		spacing,
+		// 输出目录和设置区域
 		container.NewGridWithColumns(2, leftBox2, rightBox2),
 		// 新的Sheet对比组功能区域
 		container.NewVBox(

@@ -95,10 +95,10 @@ func NewExcelCompareApp(w, h float32) *ExcelCompareApp {
 		outDir:            currentDir, // 设置默认输出目录
 	}
 	a.myWindow = a.myApp.NewWindow("Excel 对比")
-	// 设置初始大小，但允许用户缩放
-	a.myWindow.Resize(fyne.NewSize(w, h))
-	// 确保窗口可以缩放（Fyne默认支持，这里不做额外限制）
-	a.myWindow.SetFixedSize(false)
+	// 设置初始窗口大小，增加宽度以更好地显示文件路径
+	a.myWindow.Resize(fyne.NewSize(w+100, h))
+	// 居中显示窗口
+	a.myWindow.CenterOnScreen()
 
 	// 初始化只读日志框
 	a.logRich = widget.NewMultiLineEntry()
