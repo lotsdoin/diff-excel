@@ -71,6 +71,7 @@ type ExcelCompareApp struct {
 	currentCmpSheetSelect *widget.Select // 当前选择的对比Sheet
 	sheetPairsList        *widget.List   // Sheet对比组列表
 	addPairButton         *widget.Button // 添加对比组按钮
+	autoMatchButton       *widget.Button // 自动匹配所有Sheet按钮
 
 	// 功能函数
 	srcUploadFunc func()

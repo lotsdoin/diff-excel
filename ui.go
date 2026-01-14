@@ -26,6 +26,11 @@ func (a *ExcelCompareApp) initSheetSelectors() {
 		a.addSheetPair()
 	})
 
+	// 自动匹配所有Sheet按钮
+	a.autoMatchButton = widget.NewButton("自动匹配所有Sheet", func() {
+		a.autoMatchAllSheets()
+	})
+
 	// Sheet对比组列表
 	a.sheetPairsList = widget.NewList(
 		func() int { return len(a.sheetPairs) },
@@ -537,12 +542,14 @@ func (a *ExcelCompareApp) createUILayout() fyne.CanvasObject {
 		spacing,
 		container.NewVBox(
 			widget.NewSeparator(),
-			// 3列布局，让选择器和按钮能响应式
+			// 第一行：选择器和添加按钮 - 3列布局
 			container.NewGridWithColumns(3,
 				a.currentSrcSheetSelect,
 				a.currentCmpSheetSelect,
 				a.addPairButton,
 			),
+			// 第二行：自动匹配按钮
+			a.autoMatchButton,
 			utils.SetTitle("对比组列表", 14),
 			a.createSheetPairsListContainer(), // 使用新的容器函数
 		),
@@ -620,4 +627,78 @@ func (a *ExcelCompareApp) tryAddDefaultPair() {
 		}
 		a.appendLog(fmt.Sprintf("自动添加默认对比组: %s\n", defaultPair.DisplayName))
 	}
+}
+
+// autoMatchAllSheets 自动匹配两个文件中所有名称相同的Sheet
+func (a *ExcelCompareApp) autoMatchAllSheets() {
+	if a.srcFile == "" || a.cmpFile == "" {
+		dialog.ShowError(fmt.Errorf("请先选择两个Excel文件"), a.myWindow)
+		return
+	}
+	if len(a.srcSheets) == 0 || len(a.cmpSheets) == 0 {
+		dialog.ShowError(fmt.Errorf("无法读取Sheet列表，请确保文件有效"), a.myWindow)
+		return
+	}
+
+	// 使用 map 记录新文件的sheet，方便查找
+	cmpSheetMap := make(map[string]bool)
+	for _, sheet := range a.cmpSheets {
+		cmpSheetMap[sheet] = true
+	}
+
+	// 清空现有的对比组
+	var newPairs []SheetPair
+	matchedCount := 0
+	srcOnlyCount := 0
+
+	// 遍历旧文件的所有sheet，查找新文件中同名的sheet
+	for _, srcSheet := range a.srcSheets {
+		if cmpSheetMap[srcSheet] {
+			// 找到同名sheet，添加到对比组
+			pair := SheetPair{
+				SrcSheet:    srcSheet,
+				CmpSheet:    srcSheet,
+				DisplayName: fmt.Sprintf("【新】%s <<【旧】%s", srcSheet, srcSheet),
+			}
+			newPairs = append(newPairs, pair)
+			matchedCount++
+		} else {
+			srcOnlyCount++
+		}
+	}
+
+	// 统计只在新文件中存在的sheet
+	cmpOnlyCount := len(a.cmpSheets) - matchedCount
+
+	if matchedCount == 0 {
+		dialog.ShowError(fmt.Errorf("没有找到任何名称相同的Sheet"), a.myWindow)
+		return
+	}
+
+	// 更新对比组列表
+	a.sheetPairs = newPairs
+	if a.sheetPairsList != nil {
+		a.sheetPairsList.Refresh()
+		// 重新创建UI布局以更新容器高度
+		a.myWindow.SetContent(a.createUILayout())
+	}
+
+	// 输出匹配结果
+	a.appendLog(fmt.Sprintf("\n====== 自动匹配完成 ======\n"))
+	a.appendLog(fmt.Sprintf("成功匹配: %d 对Sheet\n", matchedCount))
+	if srcOnlyCount > 0 {
+		a.appendLog(fmt.Sprintf("仅在旧文件: %d 个Sheet (已忽略)\n", srcOnlyCount))
+	}
+	if cmpOnlyCount > 0 {
+		a.appendLog(fmt.Sprintf("仅在新文件: %d 个Sheet (已忽略)\n", cmpOnlyCount))
+	}
+	a.appendLog(fmt.Sprintf("======================\n\n"))
+
+	// 显示确认对话框
+	dialog.ShowInformation(
+		"自动匹配完成",
+		fmt.Sprintf("成功匹配 %d 对Sheet\n只在旧文件: %d 个\n只在新文件: %d 个",
+			matchedCount, srcOnlyCount, cmpOnlyCount),
+		a.myWindow,
+	)
 }
