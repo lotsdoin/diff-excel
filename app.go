@@ -222,18 +222,20 @@ func (a *ExcelCompareApp) compareFunc() {
 
 		elapsed := time.Since(startTime)
 
-		// 关闭进度对话框
-		progressDlg.Hide()
+		// 在主线程中关闭进度对话框和处理结果
+		fyne.Do(func() {
+			progressDlg.Hide()
 
-		if err != nil {
-			a.appendLog(fmt.Sprintf("错误：%v\n", err))
-			dialog.ShowError(err, a.myWindow)
-		} else {
-			a.appendLog(fmt.Sprintf("Excel文件: %s\n日志文件: %s\n", a.outExcelFile, a.outLogFile))
-			a.appendLog(fmt.Sprintf("耗时: %.2f秒\n", elapsed.Seconds()))
-			a.appendLog("====== [" + time.Now().Format("2006.01.02 15:04:05") + "] 结束======\n\n")
-			a.Success()
-		}
+			if err != nil {
+				a.appendLog(fmt.Sprintf("错误：%v\n", err))
+				dialog.ShowError(err, a.myWindow)
+			} else {
+				a.appendLog(fmt.Sprintf("Excel文件: %s\n日志文件: %s\n", a.outExcelFile, a.outLogFile))
+				a.appendLog(fmt.Sprintf("耗时: %.2f秒\n", elapsed.Seconds()))
+				a.appendLog("====== [" + time.Now().Format("2006.01.02 15:04:05") + "] 结束======\n\n")
+				a.Success()
+			}
+		})
 	}()
 }
 

@@ -236,6 +236,9 @@ func (a *ExcelCompareApp) CompareMultipleSheets() error {
 		return fmt.Errorf("创建样式失败: %v", err)
 	}
 
+	// 样式缓存：避免重复创建相同样式（优化性能）
+	styleCache := make(map[int]int)
+
 	var allLogBuilder strings.Builder
 	totalDiffCount := 0
 
@@ -267,9 +270,15 @@ func (a *ExcelCompareApp) CompareMultipleSheets() error {
 			diffSheetName = srcSheetName
 		}
 
-		// 对比单元格
+		// 对比单元格 - 收集差异单元格批量处理
 		sheetDiffCount := 0
 		var sheetLogBuilder strings.Builder
+		var diffCells []struct {
+			cell    string
+			oldVal  string
+			newVal  string
+			styleID int
+		}
 
 		maxRow := len(srcRows)
 		if len(cmpRows) > maxRow {
@@ -300,52 +309,70 @@ func (a *ExcelCompareApp) CompareMultipleSheets() error {
 					logLine := fmt.Sprintf("[%s] %s: %s → %s\n", srcSheetName, cell, oldVal, newVal)
 					sheetLogBuilder.WriteString(logLine)
 
-					// 设置新值
-					diffF.SetCellValue(diffSheetName, cell, newVal)
+					var finalStyleID = styleID
 
-					// 设置样式
+					// 设置高亮样式（使用缓存优化）
 					if a.keepOriginalFormat {
-						// 保持原格式并添加高亮
 						originalStyleID, _ := src.GetCellStyle(srcSheetName, cell)
 						if originalStyleID != 0 {
-							originalStyle, _ := src.GetStyle(originalStyleID)
-							if originalStyle != nil {
-								originalStyle.Fill = excelize.Fill{
-									Type:    "pattern",
-									Pattern: 1,
-									Color:   []string{a.highlightClr},
-								}
-								combinedStyleID, _ := diffF.NewStyle(originalStyle)
-								diffF.SetCellStyle(diffSheetName, cell, cell, combinedStyleID)
+							// 检查缓存
+							if cachedStyleID, ok := styleCache[originalStyleID]; ok {
+								finalStyleID = cachedStyleID
 							} else {
-								diffF.SetCellStyle(diffSheetName, cell, cell, styleID)
+								originalStyle, _ := src.GetStyle(originalStyleID)
+								if originalStyle != nil {
+									originalStyle.Fill = excelize.Fill{
+										Type:    "pattern",
+										Pattern: 1,
+										Color:   []string{a.highlightClr},
+									}
+									combinedStyleID, _ := diffF.NewStyle(originalStyle)
+									styleCache[originalStyleID] = combinedStyleID
+									finalStyleID = combinedStyleID
+								}
 							}
-						} else {
-							diffF.SetCellStyle(diffSheetName, cell, cell, styleID)
 						}
-					} else {
-						diffF.SetCellStyle(diffSheetName, cell, cell, styleID)
 					}
 
-					// 添加备注
-					if a.showOldInComment && oldVal != "" {
-						_ = diffF.AddComment(diffSheetName, excelize.Comment{
-							Cell:   cell,
-							Author: "Diff Excel",
-							Paragraph: []excelize.RichTextRun{
-								{Text: "旧数据: \n", Font: &excelize.Font{Bold: true, Color: "#6c0808ff"}},
-								{Text: oldVal},
-							},
-							Height: 40,
-							Width:  180,
-						})
-					}
+					diffCells = append(diffCells, struct {
+						cell    string
+						oldVal  string
+						newVal  string
+						styleID int
+					}{
+						cell:    cell,
+						oldVal:  oldVal,
+						newVal:  newVal,
+						styleID: finalStyleID,
+					})
 				} else {
 					// 如果没有差异，且不保持原格式，则设置新值
 					if !a.keepOriginalFormat {
 						diffF.SetCellValue(diffSheetName, cell, newVal)
 					}
 				}
+			}
+		}
+
+		// 批量应用差异单元格修改
+		for _, dc := range diffCells {
+			// 设置新值
+			diffF.SetCellValue(diffSheetName, dc.cell, dc.newVal)
+			// 设置高亮样式
+			diffF.SetCellStyle(diffSheetName, dc.cell, dc.cell, dc.styleID)
+
+			// 添加备注（如果需要）
+			if a.showOldInComment && dc.oldVal != "" {
+				_ = diffF.AddComment(diffSheetName, excelize.Comment{
+					Cell:   dc.cell,
+					Author: "Diff Excel",
+					Paragraph: []excelize.RichTextRun{
+						{Text: "旧数据: \n", Font: &excelize.Font{Bold: true, Color: "#6c0808ff"}},
+						{Text: dc.oldVal},
+					},
+					Height: 40,
+					Width:  180,
+				})
 			}
 		}
 
@@ -380,7 +407,7 @@ func (a *ExcelCompareApp) CompareMultipleSheets() error {
 	return nil
 }
 
-// CompareFlexibleSheetPairs 灵活的多Sheet对比功能，支持手动选择多对Sheet进行对比
+// CompareFlexibleSheetPairs 灵活的多Sheet对比功能，支持手动选择多对Sheet进行对比（优化版）
 func (a *ExcelCompareApp) CompareFlexibleSheetPairs() error {
 	if len(a.sheetPairs) == 0 {
 		return fmt.Errorf("没有设置Sheet对比对")
@@ -400,7 +427,7 @@ func (a *ExcelCompareApp) CompareFlexibleSheetPairs() error {
 	}
 	defer cmp.Close()
 
-	// 创建输出文件（直接创建新文件，确保只有对比组数量的Sheet）
+	// 创建输出文件
 	diffF := excelize.NewFile()
 	defer diffF.Close()
 
@@ -418,17 +445,20 @@ func (a *ExcelCompareApp) CompareFlexibleSheetPairs() error {
 		return fmt.Errorf("创建样式失败: %v", err)
 	}
 
+	// 全局样式缓存：跨所有 Sheet 复用样式
+	globalStyleCache := make(map[int]int)
+
+	a.appendLog(fmt.Sprintf("开始灵活对比 %d 个Sheet对..\n", len(a.sheetPairs)))
+
 	var allLogBuilder strings.Builder
 	totalDiffCount := 0
 	firstSheet := true
 
-	a.appendLog(fmt.Sprintf("开始灵活对比 %d 个Sheet对..\n", len(a.sheetPairs)))
-
-	// 对比每个对比对
+	// 逐个处理 Sheet 对
 	for _, pair := range a.sheetPairs {
 		a.appendLog(fmt.Sprintf("\n正在对比: %s ...\n", pair.DisplayName))
 
-		// 读取Sheet数据
+		// 读取 Sheet 数据
 		srcRows, err := src.GetRows(pair.SrcSheet)
 		if err != nil {
 			a.appendLog(fmt.Sprintf("读取源 Excel Sheet '%s' 失败: %v\n", pair.SrcSheet, err))
@@ -440,26 +470,24 @@ func (a *ExcelCompareApp) CompareFlexibleSheetPairs() error {
 			continue
 		}
 
-		// 确定输出Sheet名称：使用DisplayName
+		// 确定输出 Sheet 名称
 		diffSheetName := pair.DisplayName
 
-		// 为每个对比组创建对应的Sheet
+		// 创建输出 Sheet
 		if firstSheet {
-			// 第一个Sheet更名默认的Sheet1
 			diffF.SetSheetName("Sheet1", diffSheetName)
 			firstSheet = false
 		} else {
-			// 后续的Sheet创建新的
 			diffF.NewSheet(diffSheetName)
 		}
 
-		// 如果启用格式保持，复制新文件的Sheet格式
+		// 如果启用格式保持，复制 Sheet 格式和数据
 		if a.keepOriginalFormat {
-			if err := a.copySheetContent(cmp, pair.CmpSheet, diffF, diffSheetName); err != nil {
-				a.appendLog(fmt.Sprintf("复制新文件Sheet格式失败: %v\n", err))
+			if err := a.copySheetContentOptimized(cmp, pair.CmpSheet, diffF, diffSheetName); err != nil {
+				a.appendLog(fmt.Sprintf("复制新文件 Sheet 格式失败: %v\n", err))
 			}
 		} else {
-			// 如果不保持格式，需要先填充基础数据
+			// 不保持格式时，只填充基础数据
 			for r, row := range cmpRows {
 				for c, cellValue := range row {
 					cell, _ := excelize.CoordinatesToCellName(c+1, r+1)
@@ -468,9 +496,15 @@ func (a *ExcelCompareApp) CompareFlexibleSheetPairs() error {
 			}
 		}
 
-		// 对比单元格
+		// 对比单元格并收集差异
 		sheetDiffCount := 0
 		var sheetLogBuilder strings.Builder
+		var diffCells []struct {
+			cell            string
+			newVal          string
+			oldVal          string
+			originalStyleID int
+		}
 
 		maxRow := len(srcRows)
 		if len(cmpRows) > maxRow {
@@ -495,63 +529,72 @@ func (a *ExcelCompareApp) CompareFlexibleSheetPairs() error {
 					newVal = cmpRows[r][c]
 				}
 
-				cell, _ := excelize.CoordinatesToCellName(c+1, r+1)
 				if oldVal != newVal {
 					sheetDiffCount++
+					cell, _ := excelize.CoordinatesToCellName(c+1, r+1)
 					logLine := fmt.Sprintf("[%s] %s: %s → %s\n", pair.DisplayName, cell, oldVal, newVal)
 					sheetLogBuilder.WriteString(logLine)
 
-					// 设置新值（如果之前没有设置过）
+					var originalStyleID int
 					if a.keepOriginalFormat {
-						// 格式保持模式下，更新单元格值
-						diffF.SetCellValue(diffSheetName, cell, newVal)
-					} else {
-						// 普通模式下，单元格值已经在上面设置过了，只需要更新差异单元格
-						diffF.SetCellValue(diffSheetName, cell, newVal)
+						originalStyleID, _ = cmp.GetCellStyle(pair.CmpSheet, cell)
 					}
 
-					// 设置高亮样式
-					if a.keepOriginalFormat {
-						// 保持新文件格式并添加高亮
-						originalStyleID, _ := cmp.GetCellStyle(pair.CmpSheet, cell)
-						if originalStyleID != 0 {
-							originalStyle, _ := cmp.GetStyle(originalStyleID)
-							if originalStyle != nil {
-								originalStyle.Fill = excelize.Fill{
-									Type:    "pattern",
-									Pattern: 1,
-									Color:   []string{a.highlightClr},
-								}
-								combinedStyleID, _ := diffF.NewStyle(originalStyle)
-								diffF.SetCellStyle(diffSheetName, cell, cell, combinedStyleID)
-							} else {
-								diffF.SetCellStyle(diffSheetName, cell, cell, styleID)
-							}
-						} else {
-							diffF.SetCellStyle(diffSheetName, cell, cell, styleID)
-						}
-					} else {
-						diffF.SetCellStyle(diffSheetName, cell, cell, styleID)
-					}
-
-					// 添加备注
-					if a.showOldInComment && oldVal != "" {
-						_ = diffF.AddComment(diffSheetName, excelize.Comment{
-							Cell:   cell,
-							Author: "Diff Excel",
-							Paragraph: []excelize.RichTextRun{
-								{Text: "旧数据: \n", Font: &excelize.Font{Bold: true, Color: "#6c0808ff"}},
-								{Text: oldVal},
-							},
-							Height: 40,
-							Width:  180,
-						})
-					}
-				} else {
-					// 如果没有差异，不需要额外处理
-					// 格式保持模式下：copySheetContent已经复制了所有数据
-					// 普通模式下：已经预先填充了所有数据
+					diffCells = append(diffCells, struct {
+						cell            string
+						newVal          string
+						oldVal          string
+						originalStyleID int
+					}{
+						cell:            cell,
+						newVal:          newVal,
+						oldVal:          oldVal,
+						originalStyleID: originalStyleID,
+					})
 				}
+			}
+		}
+
+		// 批量应用差异单元格修改
+		for _, dc := range diffCells {
+			// 设置新值
+			diffF.SetCellValue(diffSheetName, dc.cell, dc.newVal)
+
+			// 设置高亮样式
+			finalStyleID := styleID
+			if a.keepOriginalFormat && dc.originalStyleID != 0 {
+				// 检查全局样式缓存
+				if cachedStyleID, ok := globalStyleCache[dc.originalStyleID]; ok {
+					finalStyleID = cachedStyleID
+				} else {
+					// 创建新的合并样式
+					originalStyle, _ := cmp.GetStyle(dc.originalStyleID)
+					if originalStyle != nil {
+						originalStyle.Fill = excelize.Fill{
+							Type:    "pattern",
+							Pattern: 1,
+							Color:   []string{a.highlightClr},
+						}
+						combinedStyleID, _ := diffF.NewStyle(originalStyle)
+						globalStyleCache[dc.originalStyleID] = combinedStyleID
+						finalStyleID = combinedStyleID
+					}
+				}
+			}
+			diffF.SetCellStyle(diffSheetName, dc.cell, dc.cell, finalStyleID)
+
+			// 添加备注（如果需要）
+			if a.showOldInComment && dc.oldVal != "" {
+				_ = diffF.AddComment(diffSheetName, excelize.Comment{
+					Cell:   dc.cell,
+					Author: "Diff Excel",
+					Paragraph: []excelize.RichTextRun{
+						{Text: "旧数据: \n", Font: &excelize.Font{Bold: true, Color: "#6c0808ff"}},
+						{Text: dc.oldVal},
+					},
+					Height: 40,
+					Width:  180,
+				})
 			}
 		}
 
@@ -579,18 +622,29 @@ func (a *ExcelCompareApp) CompareFlexibleSheetPairs() error {
 	return nil
 }
 
-// copySheetContent 复制Sheet内容到新Sheet（用于格式保持模式）
-func (a *ExcelCompareApp) copySheetContent(srcFile *excelize.File, srcSheet string, dstFile *excelize.File, dstSheet string) error {
+// copySheetContentOptimized 优化版：复制Sheet内容到新Sheet（减少重复操作）
+func (a *ExcelCompareApp) copySheetContentOptimized(srcFile *excelize.File, srcSheet string, dstFile *excelize.File, dstSheet string) error {
 	// 读取源Sheet的所有数据
 	rows, err := srcFile.GetRows(srcSheet)
 	if err != nil {
 		return err
 	}
 
-	// 复制列宽
-	cols, _ := srcFile.GetCols(srcSheet)
-	for i := range cols {
-		colName, _ := excelize.ColumnNumberToName(i + 1)
+	if len(rows) == 0 {
+		return nil
+	}
+
+	// 计算实际使用的列数（只处理有数据的列）
+	maxCol := 0
+	for _, row := range rows {
+		if len(row) > maxCol {
+			maxCol = len(row)
+		}
+	}
+
+	// 复制列宽（只复制实际使用的列）
+	for c := 0; c < maxCol; c++ {
+		colName, _ := excelize.ColumnNumberToName(c + 1)
 		width, _ := srcFile.GetColWidth(srcSheet, colName)
 		if width > 0 {
 			dstFile.SetColWidth(dstSheet, colName, colName, width)
@@ -611,20 +665,32 @@ func (a *ExcelCompareApp) copySheetContent(srcFile *excelize.File, srcSheet stri
 		dstFile.MergeCell(dstSheet, mergeCell.GetStartAxis(), mergeCell.GetEndAxis())
 	}
 
+	// 样式缓存：避免重复创建相同样式
+	styleCache := make(map[int]int)
+
 	// 复制数据到目标Sheet
 	for r, row := range rows {
-		for c, cellValue := range row {
+		for c := range row {
 			cell, _ := excelize.CoordinatesToCellName(c+1, r+1)
+			cellValue := row[c]
+
 			// 设置单元格值
 			dstFile.SetCellValue(dstSheet, cell, cellValue)
 
-			// 复制样式
+			// 复制样式（使用缓存）
 			styleID, _ := srcFile.GetCellStyle(srcSheet, cell)
 			if styleID != 0 {
-				style, _ := srcFile.GetStyle(styleID)
-				if style != nil {
-					newStyleID, _ := dstFile.NewStyle(style)
+				// 检查缓存
+				if newStyleID, ok := styleCache[styleID]; ok {
 					dstFile.SetCellStyle(dstSheet, cell, cell, newStyleID)
+				} else {
+					// 创建新样式并缓存
+					style, _ := srcFile.GetStyle(styleID)
+					if style != nil {
+						newStyleID, _ := dstFile.NewStyle(style)
+						styleCache[styleID] = newStyleID
+						dstFile.SetCellStyle(dstSheet, cell, cell, newStyleID)
+					}
 				}
 			}
 		}
