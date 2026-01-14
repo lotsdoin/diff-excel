@@ -76,6 +76,10 @@ type ExcelCompareApp struct {
 	// 功能函数
 	srcUploadFunc func()
 	cmpUploadFunc func()
+
+	// 异步操作支持
+	isComparing bool     // 是否正在比较中
+	logChan    chan string // 日志通道，用于从 goroutine 安全地更新 UI
 }
 
 // NewExcelCompareApp 创建新的Excel对比应用程序
@@ -94,7 +98,9 @@ func NewExcelCompareApp(w, h float32) *ExcelCompareApp {
 		selectedCmpSheets: make(map[string]bool),
 		multiSheetMode:    false,
 		outDir:            currentDir, // 设置默认输出目录
+		logChan:           make(chan string, 100), // 缓冲 100 条日志
 	}
+
 	a.myWindow = a.myApp.NewWindow("Excel 对比")
 	// 设置初始窗口大小，增加宽度以更好地显示文件路径
 	a.myWindow.Resize(fyne.NewSize(w+100, h))
@@ -106,18 +112,43 @@ func NewExcelCompareApp(w, h float32) *ExcelCompareApp {
 	a.logRich.Wrapping = fyne.TextWrapWord
 	a.logRich.Disable() // 只读模式，禁止手动输入
 
+	// 启动日志处理 goroutine（在 logRich 初始化之后）
+	go func() {
+		for text := range a.logChan {
+			// 在主线程中执行 UI 更新
+			fyne.Do(func() {
+				a.logRich.Append(text)
+			})
+		}
+	}()
+
 	a.initUI()
 	return a
 }
 
-// appendLog 追加日志：同步终端输出和日志框内容
+// appendLog 追加日志：通过 channel 发送到 UI 线程（线程安全）
 func (a *ExcelCompareApp) appendLog(text string) {
 	fmt.Print(text) // 保留终端输出
+	select {
+	case a.logChan <- text:
+	default:
+		// 通道满时丢弃（避免阻塞对比流程）
+	}
+}
+
+// appendLogUI 追加日志：仅从UI线程调用（更快）
+func (a *ExcelCompareApp) appendLogUI(text string) {
+	fmt.Print(text)
 	a.logRich.Append(text)
 }
 
-// compareFunc 执行对比操作的主函数
+// compareFunc 执行对比操作的主函数（异步执行）
 func (a *ExcelCompareApp) compareFunc() {
+	if a.isComparing {
+		dialog.ShowInformation("提示", "正在对比中，请稍候...", a.myWindow)
+		return
+	}
+
 	if a.srcFile == "" || a.cmpFile == "" {
 		dialog.ShowError(fmt.Errorf("请先选择源 Excel 和对比 Excel 文件"), a.myWindow)
 		return
@@ -136,7 +167,7 @@ func (a *ExcelCompareApp) compareFunc() {
 			dialog.ShowError(fmt.Errorf("请先添加Sheet对比组"), a.myWindow)
 			return
 		}
-		a.appendLog("使用灵活多Sheet对比模式\n")
+		a.appendLogUI("使用灵活多Sheet对比模式\n")
 	}
 
 	if a.outDir == "" {
@@ -162,24 +193,48 @@ func (a *ExcelCompareApp) compareFunc() {
 	a.outExcelFile = filepath.Join(timeDir, fmt.Sprintf("diff_excel_%s.xlsx", timeNow))
 	a.outLogFile = filepath.Join(timeDir, fmt.Sprintf("diff_log_%s.txt", timeNow))
 
-	a.appendLog("\n====== [" + time.Now().Format("2006.01.02 15:04:05") + "] 开始======\n")
+	// 创建进度对话框
+	progressDlg := dialog.NewCustom("正在对比", "取消（后台继续）",
+		container.NewVBox(
+			widget.NewLabel("正在对比Excel文件，请稍候..."),
+			widget.NewProgressBarInfinite(),
+		),
+		a.myWindow,
+	)
 
-	var err error
-	if a.multiSheetMode {
-		err = a.CompareMultipleSheets()
-	} else {
-		// 使用灵活多Sheet对比功能
-		err = a.CompareFlexibleSheetPairs()
-	}
+	a.isComparing = true
+	progressDlg.Show()
 
-	if err != nil {
-		dialog.ShowError(err, a.myWindow)
-		a.appendLog(fmt.Sprintf("错误：%v\n", err))
-	} else {
-		a.appendLog(fmt.Sprintf("Excel文件: %s\n日志文件: %s\n", a.outExcelFile, a.outLogFile))
-		a.appendLog("====== [" + time.Now().Format("2006.01.02 15:04:05") + "] 结束======\n\n")
-		a.Success()
-	}
+	// 在goroutine中执行对比
+	go func() {
+		defer func() { a.isComparing = false }()
+
+		startTime := time.Now()
+		a.appendLog("\n====== [" + time.Now().Format("2006.01.02 15:04:05") + "] 开始======\n")
+
+		var err error
+		if a.multiSheetMode {
+			err = a.CompareMultipleSheets()
+		} else {
+			// 使用灵活多Sheet对比功能
+			err = a.CompareFlexibleSheetPairs()
+		}
+
+		elapsed := time.Since(startTime)
+
+		// 关闭进度对话框
+		progressDlg.Hide()
+
+		if err != nil {
+			a.appendLog(fmt.Sprintf("错误：%v\n", err))
+			dialog.ShowError(err, a.myWindow)
+		} else {
+			a.appendLog(fmt.Sprintf("Excel文件: %s\n日志文件: %s\n", a.outExcelFile, a.outLogFile))
+			a.appendLog(fmt.Sprintf("耗时: %.2f秒\n", elapsed.Seconds()))
+			a.appendLog("====== [" + time.Now().Format("2006.01.02 15:04:05") + "] 结束======\n\n")
+			a.Success()
+		}
+	}()
 }
 
 // Success 显示对比完成的成功对话框
