@@ -195,16 +195,18 @@ func (a *ExcelCompareApp) updateSheetMappings() {
 	a.sheetMappings = make(map[string]string)
 
 	// 获取选中的源Sheet和目标Sheet
+	// 按 sheet 在文件中的顺序遍历（不能直接 range map：Go map 迭代序随机，
+	// 会导致「按顺序匹配」的一对一映射每次配对结果不同，拿错 sheet 互相对比）
 	var selectedSrc []string
 	var selectedCmp []string
 
-	for sheet, selected := range a.selectedSrcSheets {
-		if selected {
+	for _, sheet := range a.srcSheets {
+		if a.selectedSrcSheets[sheet] {
 			selectedSrc = append(selectedSrc, sheet)
 		}
 	}
-	for sheet, selected := range a.selectedCmpSheets {
-		if selected {
+	for _, sheet := range a.cmpSheets {
+		if a.selectedCmpSheets[sheet] {
 			selectedCmp = append(selectedCmp, sheet)
 		}
 	}
