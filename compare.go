@@ -6,9 +6,32 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/xuri/excelize/v2"
 )
+
+// safeSheetName 把 DisplayName 转成合法且唯一的输出 sheet 名。
+// excelize 限制 sheet 名不超过 31 个 UTF-16 单元；DisplayName 带「【新】…<<【旧】…」前缀，
+// 源/对比 sheet 名稍长就会超限，导致建 sheet 失败且后续所有写入静默失败（输出空文件却提示成功）。
+// 超长时截断；截断后与已用名冲突时追加 ~2、~3 等后缀，避免两对结果写进同一个 sheet。
+func safeSheetName(name string, used map[string]bool) string {
+	base := []rune(name)
+	for len(utf16.Encode(base)) > 31 {
+		base = base[:len(base)-1]
+	}
+	result := string(base)
+	for n := 2; used[result]; n++ {
+		suffix := []rune(fmt.Sprintf("~%d", n))
+		trimmed := base
+		for len(utf16.Encode(trimmed))+len(utf16.Encode(suffix)) > 31 {
+			trimmed = trimmed[:len(trimmed)-1]
+		}
+		result = string(trimmed) + string(suffix)
+	}
+	used[result] = true
+	return result
+}
 
 // CompareExcelFiles 对比Excel文件
 func (a *ExcelCompareApp) CompareExcelFiles() error {
@@ -453,6 +476,7 @@ func (a *ExcelCompareApp) CompareFlexibleSheetPairs() error {
 	var allLogBuilder strings.Builder
 	totalDiffCount := 0
 	firstSheet := true
+	usedSheetNames := make(map[string]bool)
 
 	// 逐个处理 Sheet 对
 	for _, pair := range a.sheetPairs {
@@ -470,15 +494,24 @@ func (a *ExcelCompareApp) CompareFlexibleSheetPairs() error {
 			continue
 		}
 
-		// 确定输出 Sheet 名称
-		diffSheetName := pair.DisplayName
+		// 确定输出 Sheet 名称（超过 31 字符限制时截断，避免建 sheet 静默失败）
+		diffSheetName := safeSheetName(pair.DisplayName, usedSheetNames)
+		if diffSheetName != pair.DisplayName {
+			a.appendLog(fmt.Sprintf("输出 Sheet 名超长，已调整为: %s\n", diffSheetName))
+		}
 
 		// 创建输出 Sheet
 		if firstSheet {
-			diffF.SetSheetName("Sheet1", diffSheetName)
+			if err := diffF.SetSheetName("Sheet1", diffSheetName); err != nil {
+				a.appendLog(fmt.Sprintf("创建输出 Sheet '%s' 失败: %v\n", diffSheetName, err))
+				continue
+			}
 			firstSheet = false
 		} else {
-			diffF.NewSheet(diffSheetName)
+			if _, err := diffF.NewSheet(diffSheetName); err != nil {
+				a.appendLog(fmt.Sprintf("创建输出 Sheet '%s' 失败: %v\n", diffSheetName, err))
+				continue
+			}
 		}
 
 		// 如果启用格式保持，复制 Sheet 格式和数据
