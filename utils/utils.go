@@ -43,6 +43,16 @@ func GetExeDir() (string, error) {
 	return dir, nil
 }
 
+// NormalizeColorCode 把 #RGB 简写展开为 #RRGGBB。
+// excelize 的 fill 颜色是 "FF"+hex 直拼成 ARGB，3 位简写会生成 5 位非法色值，
+// 高亮静默失效，因此写入样式前必须展开为 6 位。
+func NormalizeColorCode(s string) string {
+	if len(s) == 4 && s[0] == '#' {
+		return string([]byte{'#', s[1], s[1], s[2], s[2], s[3], s[3]})
+	}
+	return s
+}
+
 func IsValidColorCode(s string) bool {
 	if len(s) != 7 && len(s) != 4 {
 		return false

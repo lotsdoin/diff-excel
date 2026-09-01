@@ -180,6 +180,8 @@ func (a *ExcelCompareApp) compareFunc() {
 		dialog.ShowError(fmt.Errorf("颜色格式错误，需形如 #RRGGBB 或 #RGB"), a.myWindow)
 		return
 	}
+	// #RGB 简写展开为 #RRGGBB：excelize 只接受 6 位色值，简写直写会静默丢失高亮
+	a.highlightClr = utils.NormalizeColorCode(a.highlightClr)
 	timeNow := time.Now().Format("2006.01.02_15_04_05")
 
 	// 在输出目录下创建时间命名的子目录
